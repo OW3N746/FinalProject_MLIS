@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoxelAR — Puzzle Mode</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --cyan: #00F5FF;
+            --magenta: #FF00AA;
+            --amber: #FFAA00;
+            --green: #00FF88;
+            --red: #FF3355;
+            --bg: #080C14;
+            --panel-bg: rgba(8, 12, 20, 0.82);
+            --border: rgba(0, 245, 255, 0.25);
+            --text: #C8E6F0;
+        }
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Inter', sans-serif;
+            user-select: none;
+        }
+
+        /* ── LAYER STACK ── */
+        #app-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #webcam {
+            position: absolute; inset: 0;
+            width: 100%; height: 100%;
+            object-fit: cover;
+            z-index: 1;
+            transform: scaleX(-1);
+        }
+
+        /* Subtle dark vignette so UI panels read clearly */
+        #webcam::after { content: ''; }
+        .vignette {
+            position: absolute; inset: 0;
+            background: radial-gradient(ellipse at center, transparent 50%, rgba(8,12,20,0.55) 100%);
+            z-index: 2;
+            pointer-events: none;
+        }
+
+        #drawing-canvas {
+            position: absolute; inset: 0;
+            width: 100%; height: 100%;
+            object-fit: cover;
+            z-index: 3;
+            transform: scaleX(-1);
+            pointer-events: none;
+        }
+
+        #canvas-container {
+            position: absolute; inset: 0;
+            z-index: 4;
+            pointer-events: none;
+        }
+
+        /* ── HUD CORNER BRACKET MIXIN ── */
+        .hud-panel {
+            position: absolute;
+            z-index: 10;
+            background: var(--panel-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            padding: 14px 18px;
+            border: 1px solid var(--border);
+        }
+
+        /* Corner bracket decoration via pseudo elements */
+        .hud-panel::before, .hud-panel::after {
+            content: '';
+            position: absolute;
+            width: 12px; height: 12px;
+            border-color: var(--cyan);
+            border-style: solid;
+        }
+        .hud-panel::before {
+            top: -1px; left: -1px;
+            border-width: 2px 0 0 2px;
+        }
+        .hud-panel::after {
+            bottom: -1px; right: -1px;
+            border-width: 0 2px 2px 0;
+        }
+
+        /* ── TOP-LEFT STATUS HUD ── */
+        #hud-status {
+            top: 20px; left: 20px;
+            min-width: 200px;
+        }
+
+        .hud-eyebrow {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.2em;
+            color: var(--cyan);
+            opacity: 0.7;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+
+        .hud-title {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 15px;
+            font-weight: 900;
+            color: #fff;
+            letter-spacing: 0.05em;
+            margin-bottom: 10px;
+        }
+
+        .hud-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 5px;
+        }
+
+        .hud-label {
+            font-size: 10px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: rgba(200,230,240,0.5);
+            width: 46px;
+            flex-shrink: 0;
+        }
+
+        .hud-value {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--cyan);
+        }
+
+        /* Pulsing status dot */
+        .status-dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: var(--green);
+            box-shadow: 0 0 8px var(--green);
+            animation: pulse-dot 1.6s ease-in-out infinite;
+            flex-shrink: 0;
+        }
+        .status-dot.warn { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+        .status-dot.danger { background: var(--red); box-shadow: 0 0 8px var(--red); }
+        .status-dot.idle { background: rgba(200,230,240,0.3); box-shadow: none; animation: none; }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.7); }
+        }
+
+        #status-message {
+            font-size: 11px;
+            color: rgba(200,230,240,0.65);
+            margin-top: 8px;
+            border-top: 1px solid var(--border);
+            padding-top: 8px;
+            line-height: 1.4;
+            min-height: 30px;
+            transition: color 0.4s;
+        }
+
+        /* ── TIMER ARC (top-right) ── */
+        #hud-timer {
+            top: 20px; right: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 12px 16px;
+        }
+
+        .timer-arc-wrap {
+            position: relative;
+            width: 72px; height: 72px;
+        }
+
+        .timer-arc-wrap svg {
+            transform: rotate(-90deg);
+        }
+
+        .timer-track {
+            fill: none;
+            stroke: rgba(0,245,255,0.12);
+            stroke-width: 4;
+        }
+
+        .timer-fill {
+            fill: none;
+            stroke: var(--cyan);
+            stroke-width: 4;
+            stroke-linecap: round;
+            stroke-dasharray: 188;
+            stroke-dashoffset: 0;
+            transition: stroke-dashoffset 0.9s linear, stroke 0.4s;
+            filter: drop-shadow(0 0 4px var(--cyan));
+        }
+
+        .timer-number {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 20px;
+            font-weight: 900;
+            color: var(--cyan);
+            transition: color 0.4s;
+        }
+
+        .timer-label {
+            font-size: 9px;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: rgba(200,230,240,0.45);
+            margin-top: 6px;
+        }
+
+        /* ── GESTURE GUIDE (bottom-right) ── */
+        #hud-guide {
+            bottom: 20px; right: 20px;
+            max-width: 230px;
+        }
+
+        .guide-title {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.15em;
+            color: var(--cyan);
+            text-transform: uppercase;
+            margin-bottom: 12px;
+        }
+
+        .gesture-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .gesture-icon {
+            font-size: 22px;
+            width: 36px;
+            text-align: center;
+            flex-shrink: 0;
+            filter: drop-shadow(0 0 6px rgba(255,255,255,0.3));
+        }
+
+        .gesture-info strong {
+            display: block;
+            font-size: 11px;
+            font-weight: 500;
+            color: #fff;
+            margin-bottom: 2px;
+        }
+
+        .gesture-info span {
+            font-size: 10px;
+            color: rgba(200,230,240,0.5);
+            line-height: 1.3;
+        }
+
+        .gesture-divider {
+            height: 1px;
+            background: var(--border);
+            margin: 10px 0;
+        }
+
+        /* Color legend dots */
+        .legend-row {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            margin-bottom: 6px;
+        }
+
+        .legend-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .legend-row span {
+            font-size: 10px;
+            color: rgba(200,230,240,0.6);
+        }
+
+        /* ── MISSION PANEL (bottom-left) ── */
+        #hud-mission {
+            bottom: 20px; left: 20px;
+            max-width: 200px;
+        }
+
+        .mission-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            background: rgba(0,245,255,0.1);
+            border: 1px solid rgba(0,245,255,0.3);
+            border-radius: 3px;
+            padding: 3px 8px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 9px;
+            font-weight: 700;
+            color: var(--cyan);
+            letter-spacing: 0.12em;
+            margin-bottom: 10px;
+        }
+
+        .mission-text {
+            font-size: 12px;
+            line-height: 1.5;
+            color: rgba(200,230,240,0.7);
+        }
+
+        .mission-text strong {
+            color: var(--amber);
+        }
+
+        /* ── CENTER OVERLAY ── */
+        #center-overlay {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 20;
+            text-align: center;
+            background: rgba(8, 12, 20, 0.92);
+            border: 1px solid var(--border);
+            padding: 40px 48px;
+            display: none;
+            min-width: 320px;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+
+            /* Corner brackets on overlay too */
+        }
+
+        /* Four-corner bracket for overlay */
+        #center-overlay::before {
+            content: '';
+            position: absolute;
+            inset: -1px;
+            background: 
+                linear-gradient(var(--cyan), var(--cyan)) top left / 20px 2px no-repeat,
+                linear-gradient(var(--cyan), var(--cyan)) top left / 2px 20px no-repeat,
+                linear-gradient(var(--cyan), var(--cyan)) top right / 20px 2px no-repeat,
+                linear-gradient(var(--cyan), var(--cyan)) top right / 2px 20px no-repeat,
+                linear-gradient(var(--cyan), var(--cyan)) bottom left / 20px 2px no-repeat,
+                linear-gradient(var(--cyan), var(--cyan)) bottom left / 2px 20px no-repeat,
+                linear-gradient(var(--cyan), var(--cyan)) bottom right / 20px 2px no-repeat,
+                linear-gradient(var(--cyan), var(--cyan)) bottom right / 2px 20px no-repeat;
+            pointer-events: none;
+        }
+
+        .overlay-eyebrow {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.25em;
+            color: var(--cyan);
+            opacity: 0.7;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        #overlay-title {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 38px;
+            font-weight: 900;
+            color: #fff;
+            letter-spacing: 0.04em;
+            line-height: 1;
+            margin-bottom: 20px;
+            text-shadow: 0 0 30px rgba(0,245,255,0.4);
+        }
+
+        #overlay-desc {
+            font-size: 14px;
+            color: rgba(200,230,240,0.75);
+            line-height: 1.6;
+            margin-bottom: 20px;
+            max-width: 260px;
+        }
+
+        .thumbs-prompt {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(0,245,255,0.07);
+            border: 1px solid rgba(0,245,255,0.3);
+            border-radius: 6px;
+            padding: 10px 18px;
+            font-size: 13px;
+            color: var(--cyan);
+            animation: border-pulse 2s ease-in-out infinite;
+        }
+
+        .thumbs-prompt .big-emoji {
+            font-size: 24px;
+            animation: bob 1.5s ease-in-out infinite;
+        }
+
+        @keyframes bob {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-4px); }
+        }
+
+        @keyframes border-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(0,245,255,0.2); }
+            50% { box-shadow: 0 0 0 6px rgba(0,245,255,0); }
+        }
+
+        #countdown-text {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 96px;
+            font-weight: 900;
+            color: var(--magenta);
+            line-height: 1;
+            display: none;
+            text-shadow: 0 0 40px rgba(255,0,170,0.6);
+            animation: count-pop 1s ease-out;
+        }
+
+        @keyframes count-pop {
+            0% { transform: scale(1.5); opacity: 0; }
+            40% { transform: scale(0.9); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        /* Scan-line atmospheric effect */
+        .scanlines {
+            position: absolute; inset: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 3px,
+                rgba(0,245,255,0.015) 3px,
+                rgba(0,245,255,0.015) 4px
+            );
+            z-index: 9;
+            pointer-events: none;
+        }
+
+        /* Timer danger state */
+        .timer-danger .timer-fill { stroke: var(--red); filter: drop-shadow(0 0 6px var(--red)); }
+        .timer-danger .timer-number { color: var(--red); animation: blink 0.6s step-end infinite; }
+        @keyframes blink { 50% { opacity: 0.4; } }
+
+        /* Win / Lose flash overlay */
+        #flash {
+            position: absolute; inset: 0;
+            z-index: 18;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        #flash.win { background: radial-gradient(ellipse at center, rgba(0,255,136,0.18) 0%, transparent 70%); }
+        #flash.lose { background: radial-gradient(ellipse at center, rgba(255,51,85,0.18) 0%, transparent 70%); }
+        #flash.visible { opacity: 1; }
+
+        /* Responsive: smaller panels on narrow screens */
+        @media (max-width: 480px) {
+            #hud-guide { display: none; } /* hide gesture guide on tiny screens */
+            #hud-timer { top: auto; bottom: 20px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Atmospheric scan lines -->
+<div class="scanlines"></div>
+<!-- Vignette -->
+<div class="vignette"></div>
+<!-- Win/Lose flash -->
+<div id="flash"></div>
+
+<!-- ── STATUS HUD (top-left) ── -->
+<div id="hud-status" class="hud-panel">
+    <div class="hud-eyebrow">VoxelAR System</div>
+    <div class="hud-title">Puzzle Mode</div>
+    <div class="hud-row">
+        <span class="hud-label">Level</span>
+        <span class="hud-value" id="level-text">01</span>
+    </div>
+    <div class="hud-row">
+        <div class="status-dot idle" id="status-dot"></div>
+        <span id="status" style="font-size:11px; color:rgba(200,230,240,0.6);">Memuat MediaPipe...</span>
+    </div>
+</div>
+
+<!-- ── TIMER (top-right) ── -->
+<div id="hud-timer" class="hud-panel">
+    <div class="timer-arc-wrap">
+        <svg width="72" height="72" viewBox="0 0 72 72">
+            <circle class="timer-track" cx="36" cy="36" r="30"/>
+            <circle class="timer-fill" id="timer-arc" cx="36" cy="36" r="30"/>
+        </svg>
+        <div class="timer-number" id="timer-text">30</div>
+    </div>
+    <div class="timer-label">Detik</div>
+</div>
+
+<!-- ── MISSION (bottom-left) ── -->
+<div id="hud-mission" class="hud-panel">
+    <div class="mission-badge">🎯 Misi</div>
+    <p class="mission-text">Isi semua kotak <strong>transparan</strong> dengan balok sebelum waktu habis!</p>
+</div>
+
+<!-- ── GESTURE GUIDE (bottom-right) ── -->
+<div id="hud-guide" class="hud-panel">
+    <div class="guide-title">Kontrol Gestur</div>
+
+    <div class="gesture-row">
+        <div class="gesture-icon">👍</div>
+        <div class="gesture-info">
+            <strong>Mulai Level</strong>
+            <span>Acungkan jempol ke kamera</span>
+        </div>
+    </div>
+
+    <div class="gesture-divider"></div>
+
+    <div class="gesture-row">
+        <div class="gesture-icon">🤏</div>
+        <div class="gesture-info">
+            <strong>Pasang Balok</strong>
+            <span>Cubit ibu jari + telunjuk <em>(tangan kanan)</em></span>
+        </div>
+    </div>
+
+    <div class="gesture-row">
+        <div class="gesture-icon">✌️</div>
+        <div class="gesture-info">
+            <strong>Hapus Balok</strong>
+            <span>Cubit ibu jari + jari manis <em>(tangan kanan)</em></span>
+        </div>
+    </div>
+
+    <div class="gesture-row">
+        <div class="gesture-icon">✊</div>
+        <div class="gesture-info">
+            <strong>Putar Kamera</strong>
+            <span>Kepalan + geser kiri/kanan <em>(tangan kiri)</em></span>
+        </div>
+    </div>
+
+    <div class="gesture-divider"></div>
+
+    <div class="legend-row">
+        <div class="legend-dot" style="background:#00FF88; box-shadow:0 0 5px #00FF88;"></div>
+        <span>Kursor siap</span>
+    </div>
+    <div class="legend-row">
+        <div class="legend-dot" style="background:#0088FF; box-shadow:0 0 5px #0088FF;"></div>
+        <span>Mode pasang aktif</span>
+    </div>
+    <div class="legend-row">
+        <div class="legend-dot" style="background:#FF3355; box-shadow:0 0 5px #FF3355;"></div>
+        <span>Mode hapus aktif</span>
+    </div>
+</div>
+
+<!-- ── CENTER OVERLAY ── -->
+<div id="center-overlay">
+    <div class="overlay-eyebrow">Siap Bermain?</div>
+    <h1 id="overlay-title">Level 1</h1>
+    <p id="overlay-desc">Tunjukkan jempol ke kamera untuk mulai hitung mundur!</p>
+    <div class="thumbs-prompt" id="thumbs-prompt">
+        <span class="big-emoji">👍</span>
+        <span>Acungkan jempol ke kamera</span>
+    </div>
+    <div id="countdown-text">3</div>
+</div>
+
+<!-- ── MEDIA ── -->
+<div id="app-container">
+    <video id="webcam" autoplay playsinline></video>
+    <canvas id="drawing-canvas"></canvas>
+    <div id="canvas-container"></div>
+</div>
+
+<script src="three.min.js"></script>
+<script>
+    /* ── UI Enhancements ── 
+       Intercept DOM updates app.js makes so we can enhance
+       the timer arc and status dot without touching app.js.
+    */
+
+    const TIMER_FULL_DASH = 188; // 2π × r30
+
+    function updateTimerArc(secondsLeft, total = 30) {
+        const arc = document.getElementById('timer-arc');
+        const numEl = document.getElementById('timer-text');
+        const timerPanel = document.getElementById('hud-timer');
+        if (!arc || !numEl) return;
+
+        const fraction = Math.max(0, secondsLeft / total);
+        arc.style.strokeDashoffset = TIMER_FULL_DASH * (1 - fraction);
+
+        // Danger state at ≤ 8s
+        if (secondsLeft <= 8) {
+            timerPanel.classList.add('timer-danger');
+        } else {
+            timerPanel.classList.remove('timer-danger');
+        }
+    }
+
+    function triggerFlash(type) {
+        const f = document.getElementById('flash');
+        f.className = type + ' visible';
+        setTimeout(() => f.classList.remove('visible'), 600);
+    }
+
+    // Poll #timer-text for changes and sync arc
+    let lastTimerVal = 30;
+    function pollTimer() {
+        const el = document.getElementById('timer-text');
+        if (el) {
+            // app.js sets innerText like "Waktu: 30s" — extract number
+            const raw = el.innerText;
+            const match = raw.match(/(\d+)/);
+            if (match) {
+                const val = parseInt(match[1]);
+                if (val !== lastTimerVal) {
+                    lastTimerVal = val;
+                    updateTimerArc(val);
+                    // Rewrite text to just the number (arc label does the rest)
+                    el.innerText = val;
+                }
+            }
+        }
+        requestAnimationFrame(pollTimer);
+    }
+    pollTimer();
+
+    // Poll level text and clean it up
+    let lastLevelVal = '';
+    function pollLevel() {
+        const el = document.getElementById('level-text');
+        if (el) {
+            const raw = el.innerText;
+            const match = raw.match(/(\d+)/);
+            if (match) {
+                const val = match[1].padStart(2, '0');
+                if (val !== lastLevelVal) {
+                    lastLevelVal = val;
+                    el.innerText = val;
+                }
+            }
+        }
+        requestAnimationFrame(pollLevel);
+    }
+    pollLevel();
+
+    // Poll status text to update the dot
+    const DOT = document.getElementById('status-dot');
+    let lastStatus = '';
+    function pollStatus() {
+        const el = document.getElementById('status');
+        if (el && el.innerText !== lastStatus) {
+            lastStatus = el.innerText;
+            const txt = lastStatus.toLowerCase();
+            if (txt.includes('memuat') || txt.includes('model')) {
+                DOT.className = 'status-dot idle';
+            } else if (txt.includes('waktu habis') || txt.includes('gagal')) {
+                DOT.className = 'status-dot danger';
+                triggerFlash('lose');
+            } else if (txt.includes('keren') || txt.includes('lanjut')) {
+                DOT.className = 'status-dot';
+                triggerFlash('win');
+            } else if (txt.includes('menunggu') || txt.includes('jempol')) {
+                DOT.className = 'status-dot warn';
+            } else {
+                DOT.className = 'status-dot';
+            }
+        }
+        requestAnimationFrame(pollStatus);
+    }
+    pollStatus();
+
+    // Keep #thumbs-prompt visibility in sync with overlay-desc
+    const thumbsPrompt = document.getElementById('thumbs-prompt');
+    const overlayDesc = document.getElementById('overlay-desc');
+    const origDescDisplay = overlayDesc.style.display;
+    function syncThumbsPrompt() {
+        if (overlayDesc.style.display === 'none') {
+            thumbsPrompt.style.display = 'none';
+        } else {
+            thumbsPrompt.style.display = '';
+        }
+        requestAnimationFrame(syncThumbsPrompt);
+    }
+    syncThumbsPrompt();
+
+    // Reset arc when a new level starts (timer resets to 30)
+    const origSetInterval = window.setInterval;
+    // Arc resets to full when countdown fires (lastTimerVal triggers via pollTimer naturally)
+</script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
